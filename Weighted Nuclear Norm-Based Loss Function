@@ -1,0 +1,110 @@
+def dice_loss(input, target, epsilon = 1e-7):
+    
+    iflat = input.flatten()
+    tflat = target.flatten()
+    
+    intersection = (iflat * tflat).sum()
+    union = iflat.sum() + tflat.sum()
+    
+    return (2.0 * intersection + epsilon)/ (union + epsilon)
+
+
+def active_contour_loss(input, target, gs = False, epsilon = 1e-7, lambdaP = 30, mu = 0.1): 
+
+    """
+    lenth term
+    """
+    x = input[:, :, 1:, :] - input[:, :, :-1, :]
+    y = input[:, :, :, 1:] - input[:, :, :, :-1]
+
+    delta_x = x[:, :, 1:, :-2] ** 2
+    delta_y = y[:, :, :-2, 1:] ** 2
+    delta_u = torch.abs(delta_x + delta_y) 
+
+    lenth = torch.mean(torch.sqrt(delta_u + epsilon))
+
+    """
+    region term
+    """
+    region_in = torch.abs(torch.mean(input * ((target - 1.) ** 2)))
+    region_out = torch.abs(torch.mean((1. - input) * (target ** 2)))
+
+    return lenth + lambdaP * (mu * region_in + region_out) 
+
+
+def gs_loss(input, target, tp = 'w_nuc', lambda_gs = 1e-8, w = torch.rand((batch_size, batch_size))):
+
+    x = input[:, :, 1:, :] - input[:, :, :-1, :]
+    y = input[:, :, :, 1:] - input[:, :, :, :-1]
+
+    delta_x = x[:, :, 1:, :-2] ** 2
+    delta_y = y[:, :, :-2, 1:] ** 2
+    delta_u = torch.abs(delta_x + delta_y)
+    
+    if tp == 'w_nuc':
+        u, s, v = torch.svd(delta_u.flatten(1, -1))
+        nn = (s * w).sum()
+    else:
+        nn = torch.norm(delta_u.flatten(1, -1), p = tp)
+    
+    loss = lambda_gs * nn
+    
+    return loss
+
+
+class DiceLoss(nn.Module):
+    def __init__(self, is_gs, lambda_gs = 1e-8, tp = 'w_nuc', w = torch.rand((batch_size, batch_size))):
+        self.is_gs = is_gs
+        self.lambda_gs = lambda_gs
+        self.tp = tp
+        self.w = w
+        super().__init__()
+        
+    def forward(self, input, target):
+        input_1 = F.softmax(input, dim = 1)[:, 1:, :, :]
+        
+        loss = 1 - dice_loss(input_1, target)
+        
+        if self.is_gs == True:
+            loss += gs_loss(input_1, target, lambda_gs = self.lambda_gs, tp = self.tp, w = self.w)
+        
+        return loss
+
+
+class BCELoss(nn.Module):
+    def __init__(self, is_gs, tp = 'w_nuc', lambda_gs = 1e-8, w = torch.rand((batch_size, batch_size))):
+        self.is_gs = is_gs
+        self.tp = tp
+        self.lambda_gs = lambda_gs
+        self.w = w
+        super().__init__()
+        
+    def forward(self, input, target):
+        loss = CrossEntropyFlat(axis = 1)(input, target)
+                
+        if self.is_gs == True:
+            input_1 = F.softmax(input, dim = 1)[:,1:,:,:]
+            
+            loss += gs_loss(input_1, target, lambda_gs = self.lambda_gs, tp = self.tp, w = self.w)
+        
+        return loss
+    
+    
+class ACLoss(nn.Module):
+    def __init__(self, is_gs, tp = 'w_nuc', lambda_gs = 1e-8, w = torch.rand((batch_size, batch_size))):
+        self.is_gs = is_gs
+        self.tp = tp
+        self.lambda_gs = lambda_gs
+        self.w = w
+        super().__init__()
+        
+    def forward(self, input, target):
+        
+        input_1 = F.softmax(input, dim = 1)[:, 1:, :, :]
+        loss = active_contour_loss(input_1, target)
+        
+        if self.is_gs == True:
+            loss += gs_loss(input_1, target, lambda_gs = self.lambda_gs, tp = self.tp, w = self.w)
+        
+        return loss
+        
